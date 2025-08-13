@@ -1,0 +1,710 @@
+<!--
+This file contains the full source code for the "Parlamentní Pořadník" web
+application provided by the user. It will be deployed to Firebase hosting and
+versioned on GitHub. The HTML page loads Tailwind CSS and Font Awesome from
+CDNs and uses Firebase v11.6.1 modules for authentication and Firestore.
+-->
+
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parlamentní Pořadník</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <style>
+        /* Global styles */
+        html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
+        body { font-family: 'Inter', sans-serif; display: flex; flex-direction: column; }
+        #app { width: 100%; max-width: 1400px; margin-left: auto; margin-right: auto; padding: 1rem; flex-grow: 1; display: flex; flex-direction: column; min-height: 0; }
+        .view { display: none; flex-grow: 1; min-height: 0; }
+        .active-view { display: flex; flex-direction: column; min-height: 0; }
+        .scrollable-list-container { display: flex; flex-direction: column; min-height: 0; flex-grow: 1; }
+        .scrollable-list { overflow-y: auto; flex-grow: 1; }
+        .timer-ring { stroke-dasharray: 283; stroke-dashoffset: 283; transition: stroke-dashoffset 0.2s linear; }
+        #timer-display { touch-action: none; cursor: grab; }
+        /* Color input styling */
+        input[type="color"] { -webkit-appearance: none; border: none; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; }
+        input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+        input[type="color"]::-webkit-color-swatch { border: 1px solid #ccc; border-radius: 8px; }
+        .setting-item.dragging { opacity: 0.5; }
+        /* Toggle switch styles */
+        .toggle-checkbox { display: none; }
+        .toggle-label { display: block; width: 40px; height: 20px; background-color: #e2e8f0; border-radius: 9999px; position: relative; transition: background-color 0.2s; cursor: pointer; }
+        .toggle-label .dot { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: white; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.1); transition: transform 0.2s; }
+        .toggle-checkbox:checked + .toggle-label { background-color: #48BB78; }
+        .toggle-checkbox:checked + .toggle-label .dot { transform: translateX(20px); }
+        /* Tile selection styles */
+        .tile { border: 2px solid transparent; transition: all 0.2s ease-in-out; }
+        .tile.selected { border-color: #3B82F6; box-shadow: 0 0 0 2px #3B82F6; }
+        /* Fullscreen UI tweaks */
+        body.fullscreen #main-header { display: none; }
+        body.fullscreen #app { padding: 0; }
+        body.fullscreen #presenter-view { border-radius: 0; }
+        #exit-fullscreen-btn { display: none; }
+        body.fullscreen #exit-fullscreen-btn { display: block; }
+        body.fullscreen #fullscreen-btn { display: none; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+
+    <div id="app">
+        <!-- Auth Section -->
+        <div id="auth-section" class="text-center p-8 bg-white rounded-lg shadow-md m-auto">
+            <h1 class="text-3xl font-bold mb-4">Parlamentní Pořadník</h1>
+            <p class="text-gray-600 mb-6">Pro pokračování se prosím přihlaste.</p>
+            <button id="login-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-transform transform hover:scale-105">
+                <i class="fab fa-google mr-2"></i> Přihlásit se Google účtem
+            </button>
+        </div>
+
+        <!-- Main Content -->
+        <div id="main-content" class="hidden flex flex-col flex-grow min-h-0">
+            <header id="main-header" class="bg-white rounded-lg shadow-md p-4 mb-8 flex-shrink-0">
+                <div class="flex flex-wrap justify-between items-center gap-4">
+                    <div>
+                        <h1 class="text-2xl font-bold text-blue-700">Studentský Parlament</h1>
+                        <p id="user-info" class="text-xs text-gray-400 font-mono"></p>
+                    </div>
+                    <nav id="main-nav" class="flex flex-wrap gap-2">
+                        <button data-view="presenter" class="nav-btn px-3 py-2 rounded-md text-gray-700 hover:bg-blue-100">Prezentace</button>
+                        <button data-view="speaker" class="nav-btn px-3 py-2 rounded-md text-gray-700 hover:bg-blue-100">Přihlášení</button>
+                        <button data-view="admin" id="admin-nav-btn" class="nav-btn px-3 py-2 rounded-md text-gray-700 hover:bg-blue-100 hidden">Administrace</button>
+                        <button id="logout-btn" class="ml-2 px-3 py-2 rounded-md text-red-600 hover:bg-red-100" title="Odhlásit se"><i class="fa-solid fa-right-from-bracket"></i></button>
+                    </nav>
+                </div>
+            </header>
+
+            <!-- Presenter View -->
+            <div id="presenter-view" class="view p-4 md:p-8 bg-white rounded-lg shadow-md flex-grow">
+                <div class="grid md:grid-cols-3 gap-8 h-full">
+                    <div class="md:col-span-2 bg-gray-100 p-8 rounded-lg text-center flex flex-col relative">
+                        <h2 id="current-speaker-title" class="text-2xl font-semibold text-gray-500 mb-4">Právě mluví</h2>
+                        <p id="current-speaker-name" class="text-5xl font-bold text-blue-700 break-words">- Nikdo -</p>
+                        <div id="timer-display" class="relative w-48 h-48 mx-auto my-6"><svg class="w-full h-full" viewBox="0 0 100 100"><circle class="text-gray-300" stroke-width="8" stroke="currentColor" fill="transparent" r="45" cx="50" cy="50" /><circle id="timer-ring-circle" class="timer-ring text-blue-600" stroke-width="8" stroke-linecap="round" stroke="currentColor" fill="transparent" r="45" cx="50" cy="50" transform="rotate(-90 50 50)" /></svg><span id="time-left" class="absolute inset-0 flex items-center justify-center text-4xl font-mono font-bold">00:00</span></div>
+                        <div id="timer-controls" class="flex justify-center space-x-4"><button id="start-timer-btn" class="bg-green-500 hover:bg-green-600 text-white px-6 py-2 rounded-lg font-semibold disabled:bg-gray-400"><i class="fa-solid fa-play mr-2"></i>Start</button><button id="pause-timer-btn" class="bg-yellow-500 hover:bg-yellow-600 text-white px-6 py-2 rounded-lg font-semibold disabled:bg-gray-400"><i class="fa-solid fa-pause mr-2"></i>Pauza</button><button id="reset-timer-btn" class="bg-red-500 hover:bg-red-600 text-white px-6 py-2 rounded-lg font-semibold"><i class="fa-solid fa-sync mr-2"></i>Reset</button></div>
+                        <button id="fullscreen-btn" class="absolute bottom-4 left-4 text-gray-400 hover:text-gray-600 z-10" title="Celá obrazovka"><i class="fa-solid fa-expand fa-lg"></i></button>
+                        <button id="exit-fullscreen-btn" class="absolute bottom-4 left-4 text-gray-400 hover:text-gray-600 z-10" title="Ukončit celou obrazovku"><i class="fa-solid fa-compress fa-lg"></i></button>
+                    </div>
+                    <div class="bg-gray-100 p-6 rounded-lg flex flex-col min-h-0">
+                        <h2 class="text-xl font-semibold text-gray-500 mb-4 text-center flex-shrink-0">Další na řadě</h2>
+                        <div class="scrollable-list-container flex-grow">
+                             <ul id="speaker-queue-list" class="space-y-3 scrollable-list pr-2"></ul>
+                        </div>
+                        <div id="queue-summary" class="mt-4 pt-4 border-t border-gray-300 text-center text-sm text-gray-600 flex-shrink-0"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Speaker/User View -->
+            <div id="speaker-view" class="view p-8 bg-white rounded-lg shadow-md flex-grow items-center justify-center">
+                <div class="max-w-xl w-full">
+                    <h2 class="text-2xl font-bold mb-6 text-center">Přihlásit se o slovo</h2>
+                    <div id="signup-form-container">
+                        <div class="mb-4"><label for="speaker-name" class="block text-gray-700 text-sm font-bold mb-2">Jméno a příjmení:</label><input type="text" id="speaker-name" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline" placeholder="Jan Novák"></div>
+                        <div id="party-selection-container" class="mb-4"><label class="block text-gray-700 text-sm font-bold mb-2">Politická strana:</label><div id="party-tiles" class="flex flex-wrap gap-2"></div></div>
+                        <div class="mb-6"><label class="block text-gray-700 text-sm font-bold mb-2">Typ příspěvku:</label><div id="contribution-tiles" class="flex flex-wrap gap-2"></div></div>
+                        <button id="signup-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-transform transform hover:scale-105 disabled:bg-gray-400 disabled:cursor-not-allowed">Přihlásit se</button>
+                    </div>
+                    <div id="signups-disabled-message" class="hidden text-center p-4 bg-yellow-100 border border-yellow-300 rounded-lg">
+                        <i class="fa-solid fa-lock text-2xl text-yellow-600 mb-2"></i>
+                        <p class="font-semibold">Přihlašování je momentálně pozastaveno.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Admin View -->
+            <div id="admin-view" class="view p-4 bg-white rounded-lg shadow-md flex-grow">
+                 <div class="grid md:grid-cols-2 gap-4 h-full">
+                    <div class="bg-gray-50 p-4 rounded-lg flex flex-col min-h-0">
+                        <h2 class="text-2xl font-bold mb-4 flex-shrink-0">Správa pořadníku</h2>
+                        <button id="next-speaker-btn" class="w-full mb-4 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg disabled:bg-gray-400 flex-shrink-0"><i class="fa-solid fa-arrow-right-to-bracket mr-2"></i> POSUNOUT DALŠÍHO</button>
+                        <div class="scrollable-list-container"><ul id="admin-speaker-list" class="space-y-2 scrollable-list pr-2"></ul></div>
+                    </div>
+                    <div class="bg-gray-50 p-4 rounded-lg flex flex-col min-h-0">
+                        <h2 class="text-2xl font-bold mb-4 flex-shrink-0">Nastavení</h2>
+                        <div class="grid grid-cols-2 gap-4 mb-4 flex-shrink-0">
+                            <div class="p-3 border rounded-lg bg-white flex items-center justify-between"><label for="signups-enabled-toggle" class="flex items-center cursor-pointer w-full justify-between"><span class="font-semibold text-gray-700 mr-3">Povolit přihlašování</span><div class="relative"><input type="checkbox" id="signups-enabled-toggle" class="toggle-checkbox"><label for="signups-enabled-toggle" class="toggle-label"><div class="dot"></div></label></div></label></div>
+                            <div class="p-3 border rounded-lg bg-white flex items-center justify-between"><label for="parties-enabled-toggle" class="flex items-center cursor-pointer w-full justify-between"><span class="font-semibold text-gray-700 mr-3">Povolit strany</span><div class="relative"><input type="checkbox" id="parties-enabled-toggle" class="toggle-checkbox"><label for="parties-enabled-toggle" class="toggle-label"><div class="dot"></div></label></div></label></div>
+                        </div>
+                        <div class="scrollable-list-container"><div class="scrollable-list pr-2 space-y-4">
+                            <div class="collapsible-section">
+                                <button class="collapsible-trigger w-full text-left font-bold text-lg p-2 bg-white rounded-lg shadow flex justify-between items-center"><span>Správa administrátorů</span><i class="fa-solid fa-chevron-down transform"></i></button>
+                                <div class="collapsible-content space-y-3 mt-2 hidden">
+                                    <div id="admins-list"></div>
+                                    <div class="flex gap-4 p-4 border-t items-center"><input type="email" id="new-admin-email" placeholder="E-mail nového admina" class="flex-grow shadow appearance-none border rounded w-full py-2 px-3 text-gray-700"><button id="add-admin-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Přidat</button></div>
+                                </div>
+                            </div>
+                            <div class="collapsible-section">
+                                <button class="collapsible-trigger w-full text-left font-bold text-lg p-2 bg-white rounded-lg shadow flex justify-between items-center"><span>Typy příspěvků</span><i class="fa-solid fa-chevron-down transform"></i></button>
+                                <div class="collapsible-content space-y-3 mt-2 hidden">
+                                    <div class="mb-2 text-center text-xs text-gray-500">Přetáhnutím změňte prioritu (nejvyšší je dole).</div>
+                                    <div id="settings-list"></div>
+                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 border-t items-center flex-shrink-0"><input type="text" id="new-setting-name" placeholder="Název" class="md:col-span-2 shadow appearance-none border rounded w-full py-2 px-3 text-gray-700"><input type="number" id="new-setting-time" placeholder="Čas (s)" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700"><input type="color" id="new-setting-color" value="#FFFFFF" title="Vybrat barvu" class="shadow appearance-none border rounded w-full h-10"><button id="add-setting-btn" class="md:col-span-3 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Přidat typ</button></div>
+                                </div>
+                            </div>
+                            <div id="parties-admin-section" class="collapsible-section">
+                                <button class="collapsible-trigger w-full text-left font-bold text-lg p-2 bg-white rounded-lg shadow flex justify-between items-center"><span>Politické strany</span><i class="fa-solid fa-chevron-down transform"></i></button>
+                                <div class="collapsible-content space-y-3 mt-2 hidden">
+                                    <div class="mb-2 text-center text-xs text-gray-500">Přetáhnutím změňte pořadí.</div>
+                                    <div id="parties-list"></div>
+                                    <div class="flex gap-4 p-4 border-t items-center"><input type="text" id="new-party-name" placeholder="Název strany" class="flex-grow shadow appearance-none border rounded w-full py-2 px-3 text-gray-700"><button id="add-party-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">Přidat stranu</button></div>
+                                </div>
+                            </div>
+                        </div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="message-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"><div class="bg-white rounded-lg shadow-xl p-8 max-w-lg text-center"><p id="modal-text" class="mb-6 text-base text-left"></p><div class="flex justify-end gap-4"><button id="modal-close-btn" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-6 rounded-lg">OK</button></div></div></div>
+    </div>
+
+    <!-- Main application script -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection, addDoc, deleteDoc, runTransaction, updateDoc, query, getDocs, where } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase configuration for the existing project. Provided by the user.
+        const firebaseConfig = {
+            apiKey: "AIzaSyAyAXoqQA8SbBe2-ilDSKNoHPmTengxlEY",
+            authDomain: "mluvomat.firebaseapp.com",
+            projectId: "mluvomat",
+            storageBucket: "mluvomat.firebasestorage.app",
+            messagingSenderId: "399583547545",
+            appId: "1:399583547545:web:4e3e45b7cc952dc567e808"
+        };
+        // Show an error message if the config is missing (safety check)
+        if (!firebaseConfig.apiKey) {
+            document.getElementById('auth-section').innerHTML = `
+                <h1 class="text-2xl font-bold text-red-600 mb-4">Chyba Konfigurace</h1>
+                <p class="text-gray-600">Konfigurace Firebase nebyla nalezena.</p>`;
+        }
+        
+        // Initialize Firebase services
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const provider = new GoogleAuthProvider();
+        const appId = 'parliament-app-default';
+
+        // Define Firestore document and collection references
+        const configDocRef = doc(db, "artifacts", appId, "public/data/config", "main");
+        const queueRef = collection(db, "artifacts", appId, "public/data/queue");
+        
+        // --- Global State ---
+        let currentUser = null, isAdmin = false, timerInterval = null, timeRemaining = 0, totalTime = 0, isDraggingTimer = false, dbState = {};
+        let selectedParty = null, selectedContribution = null, currentQueue = [];
+        let unsubConfig = null, unsubQueue = null;
+
+        // --- UI Element Query Selector ---
+        const $ = (selector) => document.querySelector(selector);
+        const $$ = (selector) => document.querySelectorAll(selector);
+        
+        // Collect UI references in a single object for easy access
+        const ui = {
+            authSection:$('#auth-section'),mainContent:$('#main-content'),userInfo:$('#user-info'),navBtns:$$('.nav-btn'),adminNavBtn:$('#admin-nav-btn'),logoutBtn:$('#logout-btn'),loginBtn:$('#login-btn'),
+            views:{presenter:$('#presenter-view'),speaker:$('#speaker-view'),admin:$('#admin-view')},
+            speakerNameInput:$('#speaker-name'),partyTiles:$('#party-tiles'),contributionTiles:$('#contribution-tiles'),signupBtn:$('#signup-btn'),
+            adminSpeakerList:$('#admin-speaker-list'),nextSpeakerBtn:$('#next-speaker-btn'),settingsList:$('#settings-list'),
+            newSettingName:$('#new-setting-name'),newSettingTime:$('#new-setting-time'),newSettingColor:$('#new-setting-color'),addSettingBtn:$('#add-setting-btn'),
+            currentSpeakerTitle:$('#current-speaker-title'),currentSpeakerName:$('#current-speaker-name'),speakerQueueList:$('#speaker-queue-list'),
+            timeLeftDisplay:$('#time-left'),timerRingCircle:$('#timer-ring-circle'),timerDisplay:$('#timer-display'),timerControls:$('#timer-controls'),
+            startTimerBtn:$('#start-timer-btn'),pauseTimerBtn:$('#pause-timer-btn'),resetTimerBtn:$('#reset-timer-btn'),
+            messageModal:$('#message-modal'),modalText:$('#modal-text'),modalCloseBtn:$('#modal-close-btn'),
+            signupsEnabledToggle:$('#signups-enabled-toggle'),partiesEnabledToggle:$('#parties-enabled-toggle'),
+            signupFormContainer:$('#signup-form-container'),signupsDisabledMessage:$('#signups-disabled-message'),
+            queueSummary:$('#queue-summary'),
+            partiesList:$('#parties-list'),newPartyNameInput:$('#new-party-name'),addPartyBtn:$('#add-party-btn'),
+            partySelectionContainer:$('#party-selection-container'),partiesAdminSection:$('#parties-admin-section'),
+            fullscreenBtn: $('#fullscreen-btn'), exitFullscreenBtn: $('#exit-fullscreen-btn'),
+            adminsList: $('#admins-list'), newAdminEmail: $('#new-admin-email'), addAdminBtn: $('#add-admin-btn'),
+        };
+        
+        // --- Helper Functions ---
+        /**
+         * Display a modal with a given message and pause user interaction until dismissed.
+         * @param {string} message HTML content to show inside the modal.
+         */
+        const showModal=(message)=>{ui.modalText.innerHTML=message;ui.messageModal.classList.remove('hidden');};
+        ui.modalCloseBtn.addEventListener('click',()=>ui.messageModal.classList.add('hidden'));
+        
+        /**
+         * Switch the visible view (presenter, speaker, admin) based on navigation.
+         * @param {string} viewName Name of the view to activate.
+         */
+        const switchView=(viewName)=>{
+            Object.values(ui.views).forEach(v=>v.classList.remove('active-view'));
+            if(ui.views[viewName])ui.views[viewName].classList.add('active-view');
+            ui.navBtns.forEach(b=>b.classList.toggle('bg-blue-200',b.dataset.view===viewName));
+            if (viewName === 'speaker') {
+                handleTileSelection(ui.contributionTiles, ui.contributionTiles.children[0]?.dataset.name || null, false);
+                handleTileSelection(ui.partyTiles, ui.partyTiles.children[0]?.dataset.name || null, true);
+                updateSignupButtonState();
+            }
+        };
+
+        /**
+         * Determine if a given hex color appears dark. Used to adjust text color for contrast.
+         * @param {string} hex Hexadecimal color string (e.g., "#FFFFFF").
+         * @returns {boolean} True if the color is considered dark.
+         */
+        const isColorDark=(hex)=>{if(!hex)return false;const c=hex.substring(1),rgb=parseInt(c,16),r=(rgb>>16)&0xff,g=(rgb>>8)&0xff,b=(rgb>>0)&0xff;return(r*0.299+g*0.587+b*0.114)<186;};
+        /**
+         * Darken a given hex color by a percentage.
+         * @param {string} hex Hex color string.
+         * @param {number} percent Percentage to darken (0 to 1).
+         */
+        const darkenColor=(hex,percent)=>{if(!hex)return'#333333';let[r,g,b]=[parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16)];r=Math.floor(r*(1-percent));g=Math.floor(g*(1-percent));b=Math.floor(b*(1-percent));return `#${((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1)}`;};
+        /**
+         * Update the timer display text and ring offset based on remaining time.
+         */
+        const updateTimerDisplay=()=>{const m=Math.floor(timeRemaining/60).toString().padStart(2,'0'),s=(timeRemaining%60).toString().padStart(2,'0');ui.timeLeftDisplay.textContent=`${m}:${s}`;ui.timerRingCircle.style.strokeDashoffset=283*(1-(totalTime>0?timeRemaining/totalTime:0));};
+
+        /**
+         * Reset the timer back to the default duration for the current speaker's contribution type.
+         */
+        async function resetTimer(){
+            if(timerInterval){clearInterval(timerInterval);timerInterval=null;}
+            const s=dbState.state?.currentSpeaker,
+                  t=dbState.settings?.types.find(y=>y.name===s?.type);
+            totalTime=t?t.time:0;
+            timeRemaining=totalTime;
+            await updateDoc(configDocRef,{"state.timer":{timeRemaining,totalTime,isRunning:false}});
+        }
+        /**
+         * Advance to the next speaker in the queue. If there is none, clear current speaker.
+         */
+        async function advanceToNextSpeaker(){
+            if(isDraggingTimer)return;
+            try{
+                await runTransaction(db,async t=>{
+                    const c=await t.get(configDocRef),
+                          s=c.data()?.settings||{types:[]},
+                          q=await getDocs(query(queueRef));
+                    let n=q.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>{
+                        const pA=s.types.findIndex(x=>x.name===a.type),
+                              pB=s.types.findIndex(x=>x.name===b.type);
+                        return pA!==pB?pB-pA:(a.timestamp?.toMillis()||0)-(b.timestamp?.toMillis()||0)
+                    });
+                    const e=n.length>0?n[0]:null,
+                          o=e?s.types.find(x=>x.name===e.type):null,
+                          i=o?o.time:0;
+                    t.update(configDocRef,{"state.currentSpeaker":e?{name:e.name,type:e.type,party:e.party}:null,"state.timer":{timeRemaining:i,totalTime:i,isRunning:false}});
+                    e&&t.delete(doc(queueRef,e.id))
+                });
+            }catch(err){console.error(err);showModal("Nepodařilo se přesunout řečníka.");}
+        }
+        /**
+         * Enable or disable the signup button based on input validity.
+         */
+        function updateSignupButtonState() {
+            const nameFilled = ui.speakerNameInput.value.trim() !== '';
+            const partiesRequired = dbState.settings?.partiesEnabled ?? true;
+            const partySelected = !partiesRequired || (selectedParty !== null);
+            const contributionSelected = selectedContribution !== null;
+            ui.signupBtn.disabled = !(nameFilled && partySelected && contributionSelected);
+        }
+        /**
+         * Render the current queue and admin list based on Firestore data.
+         * @param {Array} queue Array of speaker objects from Firestore.
+         * @param {Object} settings Settings object containing types and party info.
+         */
+        function renderQueue(queue, settings){
+            const sorted=[...queue].sort((a,b)=>{
+                const pA=settings.types.findIndex(s=>s.name===a.type),
+                      pB=settings.types.findIndex(s=>s.name===b.type);
+                return pA!==pB?pB-pA:(a.timestamp?.toMillis()||0)-(b.timestamp?.toMillis()||0)
+            });
+            ui.adminSpeakerList.innerHTML='';
+            ui.speakerQueueList.innerHTML='';
+            let totalQueueTime=0;
+            if(sorted.length===0){
+                const e='<li class="p-3 bg-white rounded-md shadow-sm text-center text-gray-500">Seznam je prázdný.</li>';
+                ui.adminSpeakerList.innerHTML=e;
+                ui.speakerQueueList.innerHTML=e;
+            } else {
+                sorted.forEach((speaker,i)=>{
+                    const type=settings.types.find(t=>t.name===speaker.type);
+                    totalQueueTime+=type?.time||0;
+                    const bgColor=type?.color||'#FFFFFF',
+                          textColor=isColorDark(bgColor)?'text-white':'text-gray-800';
+                    // Admin list item
+                    const adminLi=document.createElement('li');
+                    adminLi.className=`flex justify-between items-center p-3 rounded-md shadow-sm ${textColor}`;
+                    adminLi.style.backgroundColor=bgColor;
+                    const partyInfo = (dbState.settings?.partiesEnabled) ? `(${(speaker.party || 'Nezávislý')})` : '';
+                    adminLi.innerHTML=`<div><p class="font-semibold">${speaker.name}</p><p class="text-sm opacity-75">${partyInfo}</p></div><button data-id="${speaker.id}" class="remove-speaker-btn hover:opacity-75 font-bold text-xl px-2 ${textColor}">&times;</button>`;
+                    ui.adminSpeakerList.appendChild(adminLi);
+                    // Presenter queue item
+                    const presLi=document.createElement('li');
+                    presLi.className=`p-3 rounded-md shadow-sm ${textColor}`;
+                    presLi.style.backgroundColor=bgColor;
+                    if(i===0){
+                        presLi.classList.add(isAdmin?'cursor-pointer':'','border-4');
+                        presLi.style.borderColor=darkenColor(bgColor,0.2);
+                        presLi.id='next-speaker-tile';
+                        presLi.title=isAdmin?"Kliknutím přesunout do prezentace":"";
+                    }
+                    presLi.innerHTML=`<p class="font-semibold">${speaker.name} <span class="text-sm opacity-75 font-normal">${partyInfo}</span></p>`;
+                    ui.speakerQueueList.appendChild(presLi);
+                });
+            }
+            ui.queueSummary.innerHTML=`<span><i class="fa-solid fa-users mr-1"></i> ${sorted.length}</span><span class="ml-4"><i class="fa-solid fa-clock mr-1"></i> ~${Math.ceil(totalQueueTime/60)} min</span>`;
+            ui.nextSpeakerBtn.disabled=sorted.length===0;
+        }
+        /**
+         * Render the settings for contribution types, parties, and admin list.
+         * @param {Object} settingsData Settings document from Firestore.
+         */
+        function renderSettings(settingsData){
+            const types=settingsData?.types||[],
+                  parties=settingsData?.parties||[],
+                  admins=settingsData?.admins||[];
+            // Clear previous settings lists
+            ui.settingsList.innerHTML='';
+            ui.contributionTiles.innerHTML='';
+            // Contribution types list
+            if(types.length===0){
+                ui.settingsList.innerHTML='<p class="text-center text-gray-500">Žádné typy příspěvků.</p>';
+            }else{
+                types.forEach((s,i)=>{
+                    const d=document.createElement('div');
+                    d.className='setting-item p-2 bg-gray-100 rounded-md space-y-2 cursor-grab';
+                    d.dataset.name=s.name;
+                    d.draggable=true;
+                    d.innerHTML=`<div class="flex justify-between items-center"><span class="font-bold">${s.name}</span><button data-name="${s.name}" class="remove-setting-btn text-red-500 hover:text-red-700 font-bold text-xl">&times;</button></div><div class="flex justify-between items-center text-sm gap-2"><span><i class="fa-solid fa-clock w-4"></i> ${s.time}s</span><input type="color" value="${s.color||'#FFFFFF'}" class="setting-color-input" data-index="${i}" title="Změnit barvu"><span><i class="fa-solid fa-users-slash w-4"></i> Max:</span><input type="number" value="${s.maxSignups||''}" class="setting-max-input w-16 text-center border rounded" placeholder="∞" data-index="${i}"></div>`;
+                    ui.settingsList.appendChild(d);
+                    // Contribution tile for speaker form
+                    const t=document.createElement('button');
+                    const o=isColorDark(s.color)?'text-white':'text-gray-800';
+                    t.className=`tile p-2 rounded-lg hover:opacity-80 ${o}`;
+                    t.style.backgroundColor=s.color||'#E5E7EB';
+                    t.dataset.name=s.name;
+                    t.textContent=s.name;
+                    ui.contributionTiles.appendChild(t);
+                });
+            }
+            // Admin list
+            ui.adminsList.innerHTML = '';
+            admins.forEach((email, i) => {
+                const div = document.createElement('div');
+                div.className = 'flex justify-between items-center p-2 bg-gray-100 rounded-md';
+                const removeBtn = (i > 0) ? `<button data-email="${email}" class="remove-admin-btn text-red-500 hover:text-red-700 font-bold text-xl">&times;</button>` : `<i class="fa-solid fa-crown text-yellow-500" title="Super admin"></i>`;
+                div.innerHTML = `<span>${email}</span>${removeBtn}`;
+                ui.adminsList.appendChild(div);
+            });
+            // Parties: show/hide sections based on setting
+            const partiesEnabled=settingsData?.partiesEnabled??true;
+            ui.partiesAdminSection.style.display=partiesEnabled?'block':'none';
+            ui.partySelectionContainer.style.display=partiesEnabled?'block':'none';
+            ui.partiesEnabledToggle.checked=partiesEnabled;
+            // Populate the party admin list
+            ui.partiesList.innerHTML='';
+            ui.partyTiles.innerHTML='';
+            const nezavislyTile=document.createElement('button');
+            nezavislyTile.className='tile p-2 rounded-lg bg-gray-200 hover:bg-gray-300';
+            nezavislyTile.dataset.name='';
+            nezavislyTile.textContent='Nezávislý';
+            ui.partyTiles.appendChild(nezavislyTile);
+            if(parties.length===0){
+                ui.partiesList.innerHTML='<p class="text-center text-gray-500">Žádné politické strany.</p>';
+            }else{
+                parties.forEach(p=>{
+                    const d=document.createElement('div');
+                    d.className='flex justify-between items-center p-2 bg-gray-100 rounded-md';
+                    d.innerHTML=`<span>${p.name}</span><button data-name="${p.name}" class="remove-party-btn text-red-500 hover:text-red-700 font-bold text-xl">&times;</button>`;
+                    ui.partiesList.appendChild(d);
+                    const t=document.createElement('button');
+                    t.className='tile p-2 rounded-lg bg-gray-200 hover:bg-gray-300';
+                    t.dataset.name=p.name;
+                    t.textContent=p.name;
+                    ui.partyTiles.appendChild(t);
+                });
+            }
+            // Reset selected contribution and party to first available options
+            handleTileSelection(ui.contributionTiles, ui.contributionTiles.children[0]?.dataset.name || null, false);
+            handleTileSelection(ui.partyTiles, ui.partyTiles.children[0]?.dataset.name || null, true);
+        }
+        /**
+         * Initialize default data if the config document doesn't exist.
+         */
+        async function setInitialData(){
+            const docSnap=await getDoc(configDocRef);
+            if(!docSnap.exists()){
+                await setDoc(configDocRef,{settings:{signupsEnabled:true,partiesEnabled:true,
+                admins: ["gunka.daniel@gmail.com"],
+                types:[{name:"Standardní příspěvek",time:180,color:"#FFFFFF",maxSignups:null},{name:"Reakce",time:60,color:"#FED7D7",maxSignups:null},{name:"Faktická poznámka",time:30,color:"#BEE3F8",maxSignups:null}],parties:[{name:"Vládní strana"},{name:"Opoziční strana"}]},state:{currentSpeaker:null,timer:{timeRemaining:0,totalTime:0,isRunning:false}}});
+            }
+        }
+        /**
+         * Show or hide admin navigation elements based on the user's admin status.
+         * @param {boolean} isAdminStatus Whether the current user is an admin.
+         */
+        function setUiForAdmin(isAdminStatus) {
+            ui.adminNavBtn.style.display = isAdminStatus ? 'inline-block' : 'none';
+            ui.timerControls.style.display = isAdminStatus ? 'flex' : 'none';
+            if (!isAdminStatus) { ui.timerDisplay.style.cursor = 'default'; isDraggingTimer = false; } 
+            else { ui.timerDisplay.style.cursor = 'grab'; }
+            document.body.classList.toggle('is-admin', isAdminStatus);
+        }
+        // Listen for authentication state changes
+        onAuthStateChanged(auth,user=>{
+            if(user){
+                currentUser=user;
+                // Hide auth section, show main content
+                ui.authSection.style.display='none';
+                ui.mainContent.style.display='flex';
+                ui.userInfo.textContent=`Přihlášen jako: ${user.displayName||user.email}`;
+                ui.speakerNameInput.value=localStorage.getItem('parliamentSpeakerName')||user.displayName||'';
+                switchView('presenter');
+                // Real-time listeners for configuration and queue
+                onSnapshot(configDocRef,docSnap=>{
+                    dbState=docSnap.data()||{};
+                    const{state={},settings={}}=dbState;
+                    isAdmin=settings.admins?.includes(user.email)??false;
+                    setUiForAdmin(isAdmin);
+                    renderSettings(settings);
+                    renderQueue(currentQueue, settings);
+                    // Toggle signups based on config
+                    const c=settings.signupsEnabled??true;
+                    ui.signupsEnabledToggle.checked=c;
+                    ui.signupFormContainer.style.display=c?'block':'none';
+                    ui.signupsDisabledMessage.style.display=c?'none':'block';
+                    // Update current speaker and timer state
+                    const s=state.currentSpeaker;
+                    ui.currentSpeakerName.textContent=s?.name||'- Nikdo -';
+                    ui.currentSpeakerTitle.textContent=s?.type||'Právě mluví';
+                    const t=state.timer||{};
+                    if(!isDraggingTimer){
+                        timeRemaining=t.timeRemaining??0;
+                        totalTime=t.totalTime??0;
+                    }
+                    updateTimerDisplay();
+                    // Start or stop timer interval based on state
+                    if(t.isRunning&&!timerInterval){
+                        timerInterval=setInterval(()=>{
+                            if(timeRemaining>0){
+                                timeRemaining--;
+                                updateTimerDisplay()
+                            }else{
+                                if(timerInterval)clearInterval(timerInterval);
+                                timerInterval=null;
+                                // Auto-advance if time runs out and admin
+                                if(dbState.state.timer.isRunning&&isAdmin)advanceToNextSpeaker();
+                            }
+                        },1000);
+                    }else if(!t.isRunning&&timerInterval){
+                        clearInterval(timerInterval);
+                        timerInterval=null;
+                    }
+                    ui.startTimerBtn.disabled=t.isRunning||timeRemaining<=0;
+                    ui.pauseTimerBtn.disabled=!t.isRunning;
+                });
+                // Listener for queue
+                onSnapshot(query(queueRef),qSnap=>{
+                    currentQueue=qSnap.docs.map(d=>({...d.data(),id:d.id}));
+                    renderQueue(currentQueue, dbState.settings);
+                });
+                setInitialData();
+            }else{
+                currentUser=null;
+                isAdmin=false;
+                setUiForAdmin(false);
+                ui.authSection.style.display='block';
+                ui.mainContent.style.display='none';
+            }
+        });
+        // Event handlers for login and logout
+        ui.loginBtn.addEventListener('click',()=>signInWithPopup(auth,provider).catch(err=>showModal(`Přihlášení selhalo: ${err.message}`)));
+        ui.logoutBtn.addEventListener('click',()=>signOut(auth));
+        // Navigation buttons
+        ui.navBtns.forEach(b=>b.addEventListener('click',()=>switchView(b.dataset.view)));
+        // Signup form submission
+        ui.signupBtn.addEventListener('click',async()=>{
+            try{
+                const name=ui.speakerNameInput.value.trim();
+                localStorage.setItem('parliamentSpeakerName',name);
+                const isDuplicate=currentQueue.some(s=>s.name.toLowerCase()===name.toLowerCase()&&s.type===selectedContribution);
+                if(isDuplicate){
+                    throw new Error(`Řečník <b>${name}</b> je již přihlášen s tímto typem příspěvku.`);
+                }
+                await runTransaction(db,async t=>{
+                    const c=await t.get(configDocRef),
+                          q=await getDocs(query(queueRef));
+                    const typeSetting=dbState.settings?.types.find(s=>s.name===selectedContribution);
+                    if(typeSetting?.maxSignups!=null){
+                        const qSnap=await getDocs(query(queueRef,where("type","==",selectedContribution)));
+                        if(qSnap.size>=typeSetting.maxSignups)
+                            throw new Error(`Byl dosažen maximální počet přihlášek pro tento typ.`);
+                    }
+                    if(q.empty&&!c.data().state.currentSpeaker){
+                        const n=typeSetting?.time??0;
+                        t.update(configDocRef,{"state.currentSpeaker":{name,type:selectedContribution,party:selectedParty},"state.timer":{timeRemaining:n,totalTime:n,isRunning:false}});
+                    }else{
+                        t.set(doc(collection(db,"artifacts",appId,"public/data/queue")),{name,type:selectedContribution,party:selectedParty,timestamp:new Date()});
+                    }
+                });
+                showModal("Úspěšně přihlášen/a.");
+                ui.speakerNameInput.value='';
+                switchView('presenter');
+            }catch(e){
+                showModal(e.message||"Přihlášení selhalo.");
+            }
+        });
+        // Tile selection handlers
+        const handleTileSelection=(container,value,isParty)=>{
+            if(isParty){selectedParty=value;}else{selectedContribution=value;}
+            [...container.children].forEach(t=>t.classList.toggle('selected',t.dataset.name===value));
+            updateSignupButtonState();
+        };
+        ui.partyTiles.addEventListener('click',e=>{if(e.target.matches('.tile'))handleTileSelection(ui.partyTiles,e.target.dataset.name,true)});
+        ui.contributionTiles.addEventListener('click',e=>{if(e.target.matches('.tile'))handleTileSelection(ui.contributionTiles,e.target.dataset.name,false)});
+        ui.speakerNameInput.addEventListener('input', updateSignupButtonState);
+        // Settings management handlers
+        ui.addSettingBtn.addEventListener('click',async()=>{
+            const n=ui.newSettingName.value.trim(),
+                  t=parseInt(ui.newSettingTime.value),
+                  c=ui.newSettingColor.value;
+            if(!n||isNaN(t)||t<=0)return showModal("Zadejte platný název a čas > 0.");
+            const s=[...(dbState.settings?.types||[])];
+            if(s.some(x=>x.name===n))return showModal("Tento typ již existuje.");
+            await updateDoc(configDocRef,{"settings.types":[...s,{name:n,time:t,color:c,maxSignups:null}]});
+            ui.newSettingName.value='';
+            ui.newSettingTime.value='';
+            ui.newSettingColor.value='#FFFFFF';
+        });
+        ui.settingsList.addEventListener('input',async e=>{
+            if(!e.target.matches('.setting-color-input, .setting-max-input'))return;
+            const i=e.target.dataset.index,
+                  s=[...dbState.settings.types];
+            if(e.target.matches('.setting-color-input'))s[i].color=e.target.value;
+            if(e.target.matches('.setting-max-input'))s[i].maxSignups=e.target.value===''?null:parseInt(e.target.value,10);
+            await updateDoc(configDocRef,{"settings.types":s});
+        });
+        ui.settingsList.addEventListener('click',async e=>{
+            if(e.target.classList.contains('remove-setting-btn')){
+                const n=e.target.dataset.name;
+                await updateDoc(configDocRef,{"settings.types":dbState.settings.types.filter(s=>s.name!==n)});
+            }
+        });
+        ui.addPartyBtn.addEventListener('click',async()=>{
+            const n=ui.newPartyNameInput.value.trim();
+            if(!n)return;
+            const p=[...(dbState.settings?.parties||[])];
+            if(p.some(x=>x.name===n))return showModal("Tato strana již existuje.");
+            await updateDoc(configDocRef,{"settings.parties":[...p,{name:n}]});
+            ui.newPartyNameInput.value='';
+        });
+        ui.partiesList.addEventListener('click',async e=>{
+            if(e.target.classList.contains('remove-party-btn')){
+                const n=e.target.dataset.name;
+                await updateDoc(configDocRef,{"settings.parties":dbState.settings.parties.filter(p=>p.name!==n)});
+            }
+        });
+        // Collapsible sections for settings panels
+        $$('.collapsible-trigger').forEach(t=>t.addEventListener('click',()=>{
+            t.nextElementSibling.classList.toggle('hidden');
+            t.querySelector('i').classList.toggle('rotate-180');
+        }));
+        // Admin removal actions
+        ui.adminSpeakerList.addEventListener('click',e=>{
+            if(isAdmin&&e.target.matches('.remove-speaker-btn'))deleteDoc(doc(queueRef,e.target.dataset.id));
+        });
+        ui.speakerQueueList.addEventListener('click',e=>{
+            if(isAdmin&&e.target.closest('#next-speaker-tile'))advanceToNextSpeaker();
+        });
+        ui.nextSpeakerBtn.addEventListener('click',advanceToNextSpeaker);
+        // Timer control buttons
+        ui.startTimerBtn.addEventListener('click',()=>updateDoc(configDocRef,{"state.timer.isRunning":true}));
+        ui.pauseTimerBtn.addEventListener('click',()=>updateDoc(configDocRef,{"state.timer.isRunning":false,"state.timer.timeRemaining":timeRemaining}));
+        ui.resetTimerBtn.addEventListener('click',resetTimer);
+        // Enable/disable signups and parties toggles
+        ui.signupsEnabledToggle.addEventListener('change',e=>updateDoc(configDocRef,{"settings.signupsEnabled":e.target.checked}));
+        ui.partiesEnabledToggle.addEventListener('change',e=>updateDoc(configDocRef,{"settings.partiesEnabled":e.target.checked}));
+        // Fullscreen toggles
+        ui.fullscreenBtn.addEventListener('click',()=>document.body.classList.add('fullscreen'));
+        ui.exitFullscreenBtn.addEventListener('click',()=>document.body.classList.remove('fullscreen'));
+        // Admin management
+        ui.addAdminBtn.addEventListener('click',async()=>{
+            const e=ui.newAdminEmail.value.trim();
+            if(!e)return;
+            const a=[...(dbState.settings?.admins||[])];
+            if(a.includes(e))return showModal("Tento uživatel již je administrátor.");
+            await updateDoc(configDocRef,{"settings.admins":[...a,e]});
+            ui.newAdminEmail.value='';
+        });
+        ui.adminsList.addEventListener('click',async e=>{
+            if(e.target.classList.contains('remove-admin-btn')){
+                const t=e.target.dataset.email;
+                await updateDoc(configDocRef,{"settings.admins":dbState.settings.admins.filter(a=>a!==t)});
+            }
+        });
+        // Drag & drop reorder of contribution types
+        let draggedItem=null;
+        ui.settingsList.addEventListener('dragstart',e=>{draggedItem=e.target;e.target.classList.add('dragging');});
+        ui.settingsList.addEventListener('dragend',e=>{e.target.classList.remove('dragging');draggedItem=null;});
+        ui.settingsList.addEventListener('dragover',e=>{
+            e.preventDefault();
+            const afterElem=getDragAfterElement(ui.settingsList,e.clientY);
+            if(afterElem==null){
+                ui.settingsList.appendChild(draggedItem);
+            }else{
+                ui.settingsList.insertBefore(draggedItem,afterElem);
+            }
+        });
+        ui.settingsList.addEventListener('drop',async e=>{
+            e.preventDefault();
+            const names=[...ui.settingsList.querySelectorAll('.setting-item')].map(i=>i.dataset.name),
+                  s=names.map(name=>dbState.settings.types.find(x=>x.name===name));
+            await updateDoc(configDocRef,{'settings.types':s});
+        });
+        /**
+         * Helper to find the element after which the dragged item should be inserted.
+         * @param {HTMLElement} c Container list
+         * @param {number} y Mouse Y coordinate
+         */
+        function getDragAfterElement(c,y){
+            const d=[...c.querySelectorAll('.setting-item:not(.dragging)')];
+            return d.reduce((closest,child)=>{
+                const b=child.getBoundingClientRect(),
+                      o=y-b.top-b.height/2;
+                return(o<0&&o>closest.offset)?{offset:o,element:child}:closest;
+            },{offset:Number.NEGATIVE_INFINITY}).element;
+        }
+        // Timer dragging logic
+        const handleTimerDrag=(e)=>{
+            if(!isDraggingTimer||totalTime<=0||!isAdmin)return;
+            e.preventDefault();
+            const r=ui.timerDisplay.getBoundingClientRect(),
+                  x=e.touches?e.touches[0].clientX:e.clientX,
+                  y=e.touches?e.touches[0].clientY:e.clientY,
+                  a=Math.atan2(y-(r.top+r.height/2),x-(r.left+r.width/2))+Math.PI/2;
+            timeRemaining=Math.round((a<0?a+2*Math.PI:a)/(2*Math.PI)*totalTime);
+            updateTimerDisplay();
+        };
+        const startDrag=()=>{
+            if(totalTime>0&&isAdmin){
+                isDraggingTimer=true;
+                ui.timerDisplay.style.cursor='grabbing';
+                if(dbState.state?.timer?.isRunning)updateDoc(configDocRef,{"state.timer.isRunning":false});
+            }
+        };
+        const stopDrag=()=>{
+            if(isDraggingTimer&&isAdmin){
+                isDraggingTimer=false;
+                ui.timerDisplay.style.cursor='grab';
+                updateDoc(configDocRef,{"state.timer.timeRemaining":timeRemaining});
+            }
+        };
+        ui.timerDisplay.addEventListener('mousedown',startDrag);
+        document.addEventListener('mousemove',handleTimerDrag);
+        document.addEventListener('mouseup',stopDrag);
+        ui.timerDisplay.addEventListener('touchstart',startDrag);
+        document.addEventListener('touchmove',handleTimerDrag);
+        document.addEventListener('touchend',stopDrag);
+    </script>
+</body>
+</html>
